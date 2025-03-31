@@ -1,5 +1,5 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session, send_from_directory
-import pymupdf
+from flask import Flask, render_template, request, redirect, url_for, flash, session, send_from_directory, jsonify
+import fitz
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import io
@@ -14,6 +14,8 @@ from werkzeug.utils import secure_filename
 import uuid
 import json
 import shutil
+from threading import Thread
+import time
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -27,7 +29,7 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
 # Load tokenizer and model
 def load_model():
-    # Load from the base model instead of fine-tuned directory
+    # Load from the base model
     tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-cnn")
     model = AutoModelForSeq2SeqLM.from_pretrained("facebook/bart-large-cnn")
     
@@ -36,6 +38,10 @@ def load_model():
     return tokenizer, model
 
 tokenizer, model = load_model()
+
+# Add these global variables after the app configuration
+processing_status = {}
+processing_results = {}
 
 def preprocess_text(text):
     """Removes author names and unnecessary metadata from research papers."""
@@ -46,14 +52,14 @@ def preprocess_text(text):
 def extract_text_from_pdf(pdf_bytes):
     """Extracts text from PDF."""
     pdf_bytes.seek(0)
-    doc = pymupdf.open(stream=pdf_bytes.read(), filetype="pdf")
+    doc = fitz.open(stream=pdf_bytes.read(), filetype="pdf")
     full_text = "\n".join([page.get_text("text") for page in doc])
     return preprocess_text(full_text) if full_text else None
 
 def extract_images_from_pdf(pdf_bytes, output_dir):
     """Extracts images and figure captions from the PDF and saves to disk."""
     pdf_bytes.seek(0)
-    doc = pymupdf.open(stream=pdf_bytes.read(), filetype="pdf")
+    doc = fitz.open(stream=pdf_bytes.read(), filetype="pdf")
     images_info = []
     
     for page_num, page in enumerate(doc):
@@ -117,8 +123,29 @@ def extract_tables_from_pdf(pdf_path, output_dir):
                 
                 # If table is not empty
                 if not df.empty and df.size > 1:
-                    # Convert DataFrame to HTML
-                    html_table = df.to_html(index=False, classes='pdf-table', border=0)
+                    # Convert DataFrame to HTML with proper styling
+                    html_table = """
+                    <div class="table-responsive">
+                        <table class="pdf-table">
+                            <thead>
+                                <tr>
+                                    {}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {}
+                            </tbody>
+                        </table>
+                    </div>
+                    """.format(
+                        ''.join(f'<th>{col}</th>' for col in df.columns),
+                        ''.join(
+                            '<tr>{}</tr>'.format(
+                                ''.join(f'<td>{str(cell)}</td>' for cell in row)
+                            )
+                            for row in df.values
+                        )
+                    )
                     
                     # Generate a unique filename
                     table_filename = f"table_{uuid.uuid4()}.html"
@@ -130,10 +157,13 @@ def extract_tables_from_pdf(pdf_path, output_dir):
                     
                     tables_info.append({
                         "filename": table_filename,
-                        "caption": f"Table {i+1}"
+                        "caption": f"Table {i+1}",
+                        "html": html_table  # Store the HTML directly in the info
                     })
             except Exception as e:
-                print(f"Error processing table {i}: {str(e)}")
+                print(f"Error processing table {i+1}: {str(e)}")
+                continue
+    
     except Exception as e:
         print(f"Error extracting tables: {str(e)}")
     
@@ -157,174 +187,132 @@ def create_result_directory():
     os.makedirs(result_dir, exist_ok=True)
     return result_id, result_dir
 
+def process_pdf(filepath, result_id):
+    """Process PDF in a separate thread and update status."""
+    try:
+        processing_status[result_id] = {'status': 'processing', 'progress': 0}
+        
+        # Get the result directory path
+        result_dir = os.path.join(app.config['OUTPUT_FOLDER'], result_id)
+        
+        # Extract text (20%)
+        with open(filepath, 'rb') as pdf_file:
+            pdf_bytes = io.BytesIO(pdf_file.read())
+            extracted_text = extract_text_from_pdf(pdf_bytes)
+        processing_status[result_id]['progress'] = 20
+        
+        if extracted_text:
+            # Generate summary (40%)
+            summary = summarize_text(extracted_text)
+            processing_status[result_id]['progress'] = 40
+            
+            # Extract images (60%)
+            with open(filepath, 'rb') as pdf_file:
+                pdf_bytes = io.BytesIO(pdf_file.read())
+                images_info = extract_images_from_pdf(pdf_bytes, result_dir)
+            processing_status[result_id]['progress'] = 60
+            
+            # Extract tables (80%)
+            tables_info = extract_tables_from_pdf(filepath, result_dir)
+            processing_status[result_id]['progress'] = 80
+            
+            # Store results with proper file paths
+            processing_results[result_id] = {
+                'summary': summary,
+                'images_info': images_info,
+                'tables_info': tables_info,
+                'result_id': result_id  # Add result_id to the results for URL generation
+            }
+            processing_status[result_id]['progress'] = 100
+            processing_status[result_id]['status'] = 'completed'
+        else:
+            processing_status[result_id]['status'] = 'error'
+            processing_status[result_id]['error'] = 'Could not extract text from PDF'
+            
+    except Exception as e:
+        processing_status[result_id]['status'] = 'error'
+        processing_status[result_id]['error'] = str(e)
+
+@app.route('/status/<result_id>')
+def get_status(result_id):
+    """Get the current processing status."""
+    if result_id not in processing_status:
+        return jsonify({'status': 'not_found'})
+    return jsonify(processing_status[result_id])
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        # Check if the post request has the file part
         if 'pdf_file' not in request.files:
             flash('No file part')
             return redirect(request.url)
         
         file = request.files['pdf_file']
         
-        # If the user does not select a file, the browser submits an empty file
         if file.filename == '':
             flash('No selected file')
             return redirect(request.url)
         
         if file and file.filename.lower().endswith('.pdf'):
-            # Generate a unique filename
             filename = secure_filename(file.filename)
             unique_filename = f"{uuid.uuid4()}_{filename}"
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
             file.save(filepath)
             
             try:
-                # Create a unique directory for this result
                 result_id, result_dir = create_result_directory()
                 
-                # Process PDF for text extraction
-                with open(filepath, 'rb') as pdf_file:
-                    pdf_bytes = io.BytesIO(pdf_file.read())
-                    extracted_text = extract_text_from_pdf(pdf_bytes)
+                # Store filename in session
+                session['filename'] = file.filename
+                session['result_id'] = result_id
                 
-                if extracted_text:
-                    # Generate summary
-                    summary = summarize_text(extracted_text)
-                    
-                    # Extract images and save to result directory
-                    with open(filepath, 'rb') as pdf_file:
-                        pdf_bytes = io.BytesIO(pdf_file.read())
-                        images_info = extract_images_from_pdf(pdf_bytes, result_dir)
-                    
-                    # Extract tables and save to result directory
-                    tables_info = extract_tables_from_pdf(filepath, result_dir)
-                    
-                    # Store minimal data in session
-                    session['summary'] = summary
-                    session['filename'] = file.filename
-                    session['result_id'] = result_id
-                    
-                    return redirect(url_for('result'))
-                else:
-                    # Clean up the result directory if extraction failed
-                    shutil.rmtree(result_dir)
-                    flash('Could not extract text from PDF. Please try another file.')
+                # Start processing in a separate thread
+                thread = Thread(target=process_pdf, args=(filepath, result_id))
+                thread.start()
+                
+                return jsonify({
+                    'status': 'processing',
+                    'result_id': result_id
+                })
+                
             except Exception as e:
                 flash(f'Error processing PDF: {str(e)}')
-                # Clean up the result directory if processing failed
-                if 'result_dir' in locals():
-                    shutil.rmtree(result_dir)
-            
-            # Clean up the uploaded file
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                
-            return redirect(request.url)
+                return jsonify({'status': 'error', 'message': str(e)})
         else:
             flash('Please upload a PDF file')
             return redirect(request.url)
             
     return render_template('index.html')
 
+@app.route('/processing/<result_id>')
+def processing(result_id):
+    """Show the processing page with progress bar."""
+    if result_id not in processing_status:
+        flash('Invalid processing ID')
+        return redirect(url_for('index'))
+    return render_template('processing.html', result_id=result_id)
+
 @app.route('/result')
 def result():
-    if 'summary' not in session or 'filename' not in session or 'result_id' not in session:
+    if 'result_id' not in session:
         flash('No summary available. Please upload a PDF first.')
         return redirect(url_for('index'))
     
     result_id = session['result_id']
-    result_dir = os.path.join(app.config['OUTPUT_FOLDER'], result_id)
     
-    # Get list of image files
-    images_info = []
-    tables_info = []
-    
-    if os.path.exists(result_dir):
-        # List all files in the directory
-        files = os.listdir(result_dir)
-        
-        # Load images information if exists
-        for file in files:
-            if file.startswith('img_') and file.endswith('.png'):
-                # Find corresponding metadata in the session
-                for img in images_info:
-                    if img['filename'] == file:
-                        caption = img['caption']
-                        break
-                else:
-                    caption = "Figure"
-                
-                images_info.append({
-                    'filename': file,
-                    'url': f'/output/{result_id}/{file}',
-                    'caption': caption
-                })
-            
-            elif file.startswith('table_') and file.endswith('.html'):
-                # Read the HTML file
-                with open(os.path.join(result_dir, file), 'r', encoding='utf-8') as f:
-                    html_content = f.read()
-                
-                # Find corresponding metadata in the session
-                for table in tables_info:
-                    if table['filename'] == file:
-                        caption = table['caption']
-                        break
-                else:
-                    caption = "Table"
-                
-                tables_info.append({
-                    'filename': file,
-                    'html': html_content,
-                    'caption': caption
-                })
-    
-    # Get list of images and their captions
-    images = []
-    for root, _, filenames in os.walk(result_dir):
-        for filename in filenames:
-            if filename.startswith('img_') and filename.endswith('.png'):
-                # Find caption from metadata or use default
-                caption = "Figure"
-                for img_info in images_info:
-                    if img_info.get('filename') == filename:
-                        caption = img_info.get('caption', caption)
-                        break
-                
-                images.append({
-                    'url': f"/static/output/{result_id}/{filename}",
-                    'caption': caption
-                })
-    
-    # Get list of tables and their captions
-    tables = []
-    for root, _, filenames in os.walk(result_dir):
-        for filename in filenames:
-            if filename.startswith('table_') and filename.endswith('.html'):
-                # Find caption from metadata or use default
-                caption = "Table"
-                for table_info in tables_info:
-                    if table_info.get('filename') == filename:
-                        caption = table_info.get('caption', caption)
-                        break
-                
-                # Read HTML content
-                with open(os.path.join(root, filename), 'r', encoding='utf-8') as f:
-                    html_content = f.read()
-                
-                tables.append({
-                    'html': html_content,
-                    'caption': caption
-                })
-    
-    return render_template(
-        'result.html', 
-        summary=session['summary'],
-        filename=session['filename'],
-        images=images,
-        tables=tables
-    )
+    # Check if processing is complete
+    if result_id in processing_results:
+        result_data = processing_results[result_id]
+        return render_template(
+            'result.html',
+            summary=result_data['summary'],
+            filename=session['filename'],
+            images=result_data['images_info'],
+            tables=result_data['tables_info'],
+            result_id=result_id
+        )
+    else:
+        return render_template('processing.html', result_id=result_id)
 
 @app.route('/output/<path:filename>')
 def output_files(filename):
