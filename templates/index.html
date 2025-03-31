@@ -6,6 +6,19 @@
     <title>Research Paper Summarizer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .progress {
+            display: none;
+            margin-top: 20px;
+            height: 25px;
+        }
+        .loading-text {
+            display: none;
+            margin-top: 10px;
+            text-align: center;
+            color: #666;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -16,7 +29,7 @@
 
         <main>
             <div class="upload-container">
-                <form action="/" method="post" enctype="multipart/form-data">
+                <form action="/" method="post" enctype="multipart/form-data" id="uploadForm">
                     <div class="file-upload">
                         <label for="pdf_file" class="file-label">
                             <i class="fas fa-cloud-upload-alt"></i>
@@ -26,20 +39,28 @@
                         <p id="file-name">No file selected</p>
                     </div>
                     
-                    <button type="submit" class="submit-btn">
+                    <button type="submit" class="submit-btn" id="submitBtn">
                         <i class="fas fa-magic"></i> Generate Summary
                     </button>
                 </form>
+
+                <div class="progress">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                </div>
+                
+                <div class="loading-text">
+                    Processing your research paper... This may take a few minutes.
+                </div>
             </div>
             
             {% with messages = get_flashed_messages() %}
-              {% if messages %}
-                <div class="alert">
-                  {% for message in messages %}
-                    <p><i class="fas fa-exclamation-circle"></i> {{ message }}</p>
-                  {% endfor %}
-                </div>
-              {% endif %}
+                {% if messages %}
+                    <div class="alert">
+                        {% for message in messages %}
+                            <p><i class="fas fa-exclamation-circle"></i> {{ message }}</p>
+                        {% endfor %}
+                    </div>
+                {% endif %}
             {% endwith %}
         </main>
 
@@ -50,9 +71,62 @@
 
     <script>
         // Display filename when selected
-        document.getElementById('pdf_file').addEventListener('change', function() {
-            const fileName = this.files[0] ? this.files[0].name : 'No file selected';
+        document.getElementById('pdf_file').addEventListener('change', function(e) {
+            const fileName = e.target.files[0] ? e.target.files[0].name : 'No file selected';
             document.getElementById('file-name').textContent = fileName;
+        });
+
+        // Handle form submission
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const submitBtn = document.getElementById('submitBtn');
+            const progressBar = document.querySelector('.progress');
+            const progressBarInner = document.querySelector('.progress-bar');
+            const loadingText = document.querySelector('.loading-text');
+            
+            // Disable submit button and show progress
+            submitBtn.disabled = true;
+            progressBar.style.display = 'block';
+            loadingText.style.display = 'block';
+            
+            // Create FormData object
+            const formData = new FormData(this);
+            
+            // Submit form using fetch
+            fetch('/', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'processing') {
+                    // Redirect to processing page
+                    window.location.href = '/processing/' + data.result_id;
+                } else if (data.status === 'error') {
+                    // Show error message
+                    const alert = document.createElement('div');
+                    alert.className = 'alert';
+                    alert.innerHTML = `<p><i class="fas fa-exclamation-circle"></i> ${data.message}</p>`;
+                    document.querySelector('.upload-container').insertBefore(alert, progressBar);
+                    
+                    // Reset form
+                    submitBtn.disabled = false;
+                    progressBar.style.display = 'none';
+                    loadingText.style.display = 'none';
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                const alert = document.createElement('div');
+                alert.className = 'alert';
+                alert.innerHTML = '<p><i class="fas fa-exclamation-circle"></i> An error occurred while processing your request.</p>';
+                document.querySelector('.upload-container').insertBefore(alert, progressBar);
+                
+                // Reset form
+                submitBtn.disabled = false;
+                progressBar.style.display = 'none';
+                loadingText.style.display = 'none';
+            });
         });
     </script>
 </body>

@@ -3,101 +3,158 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Summary Result - Research Paper Summarizer</title>
+    <title>Research Paper Summary</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .result-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .summary-section {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        .images-section, .tables-section {
+            margin-top: 30px;
+        }
+        .image-container {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .image-container img {
+            max-width: 100%;
+            max-height: 500px; /* Limit maximum height */
+            width: auto;
+            height: auto;
+            object-fit: contain;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .image-caption {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        .table-container {
+            margin: 20px 0;
+            overflow-x: auto;
+            background: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .table-responsive {
+            overflow-x: auto;
+            margin-bottom: 1rem;
+        }
+        .pdf-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 14px;
+            background-color: #fff;
+        }
+        .pdf-table th, .pdf-table td {
+            border: 1px solid #ddd;
+            padding: 12px 8px;
+            text-align: left;
+            min-width: 100px;
+            word-wrap: break-word;
+        }
+        .pdf-table th {
+            background-color: #f5f5f5;
+            font-weight: bold;
+            color: #333;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        .pdf-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .pdf-table tr:hover {
+            background-color: #f5f5f5;
+        }
+        .table-caption {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+            text-align: center;
+        }
+        .section-title {
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #eee;
+        }
+        /* Add responsive styles */
+        @media (max-width: 768px) {
+            .result-container {
+                padding: 10px;
+            }
+            .image-container img {
+                max-height: 300px;
+            }
+            .pdf-table {
+                font-size: 12px;
+            }
+            .pdf-table th, .pdf-table td {
+                padding: 8px 6px;
+            }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <header>
-            <h1><i class="fas fa-file-alt"></i> Research Paper Summarizer</h1>
-            <p>AI-generated summary of your research paper</p>
+            <h1><i class="fas fa-file-alt"></i> Research Paper Summary</h1>
+            <p>Summary for: {{ filename }}</p>
         </header>
 
-        <main>
-            <div class="result-container">
-                <div class="result-header">
-                    <h2><i class="fas fa-file-pdf"></i> {{ filename }}</h2>
-                    <a href="{{ url_for('index') }}" class="back-btn">
-                        <i class="fas fa-arrow-left"></i> Upload another PDF
-                    </a>
+        <main class="result-container">
+            <div class="summary-section">
+                <h2 class="section-title"><i class="fas fa-align-left"></i> Summary</h2>
+                <div class="summary-content">
+                    {{ summary }}
                 </div>
-                
-                <div class="summary-box">
-                    <h3><i class="fas fa-lightbulb"></i> Summary</h3>
-                    <div class="summary-content">
-                        {{ summary }}
-                    </div>
-                    <button id="copy-btn" class="copy-btn">
-                        <i class="fas fa-copy"></i> Copy Summary
-                    </button>
-                </div>
-                
-                <!-- Extracted Images Section -->
-                {% if images|length > 0 %}
-                <div class="section-divider"></div>
-                <div class="images-section">
-                    <h3><i class="fas fa-image"></i> Figures & Diagrams</h3>
-                    <div class="images-container">
-                        {% for image in images %}
-                        <div class="image-card">
-                            <img src="{{ image.url }}" alt="{{ image.caption }}">
-                            <p class="image-caption">{{ image.caption }}</p>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endif %}
-                
-                <!-- Extracted Tables Section -->
-                {% if tables|length > 0 %}
-                <div class="section-divider"></div>
-                <div class="tables-section">
-                    <h3><i class="fas fa-table"></i> Tables</h3>
-                    <div class="tables-container">
-                        {% for table in tables %}
-                        <div class="table-card">
-                            <h4 class="table-caption">{{ table.caption }}</h4>
-                            <div class="table-wrapper">
-                                {{ table.html|safe }}
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endif %}
             </div>
-            
-            {% with messages = get_flashed_messages() %}
-              {% if messages %}
-                <div class="alert">
-                  {% for message in messages %}
-                    <p><i class="fas fa-exclamation-circle"></i> {{ message }}</p>
-                  {% endfor %}
+
+            {% if images %}
+            <div class="images-section">
+                <h2 class="section-title"><i class="fas fa-images"></i> Images</h2>
+                {% for image in images %}
+                <div class="image-container">
+                    <img src="{{ url_for('output_files', filename=result_id + '/' + image.filename) }}" alt="{{ image.caption }}">
+                    <div class="image-caption">{{ image.caption }}</div>
                 </div>
-              {% endif %}
-            {% endwith %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if tables %}
+            <div class="tables-section">
+                <h2 class="section-title"><i class="fas fa-table"></i> Tables</h2>
+                {% for table in tables %}
+                <div class="table-container">
+                    {{ table.html | safe }}
+                    <div class="table-caption">{{ table.caption }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
         </main>
 
         <footer>
-            <p>Powered by BART-CNN Summarization Model</p>
+            <a href="{{ url_for('index') }}" class="back-btn">
+                <i class="fas fa-arrow-left"></i> Back to Upload
+            </a>
         </footer>
     </div>
-
-    <script>
-        // Copy summary to clipboard
-        document.getElementById('copy-btn').addEventListener('click', function() {
-            const summaryText = document.querySelector('.summary-content').textContent;
-            navigator.clipboard.writeText(summaryText).then(function() {
-                const originalText = document.getElementById('copy-btn').innerHTML;
-                document.getElementById('copy-btn').innerHTML = '<i class="fas fa-check"></i> Copied!';
-                setTimeout(function() {
-                    document.getElementById('copy-btn').innerHTML = originalText;
-                }, 2000);
-            }).catch(function(err) {
-                console.error('Could not copy text: ', err);
-            });
-        });
-    </script>
 </body>
 </html> 
