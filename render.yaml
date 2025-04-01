@@ -2,10 +2,25 @@ services:
   - type: web
     name: iosc-rp-summary
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install --no-cache-dir -r requirements.txt
     startCommand: gunicorn web_app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.8.0
       - key: FLASK_ENV
-        value: production 
+        value: production
+      - key: UPLOAD_FOLDER
+        value: /tmp/uploads
+      - key: OUTPUT_FOLDER
+        value: /tmp/static/output
+      - key: MAX_CONTENT_LENGTH
+        value: 16777216
+    instanceType: standard
+    disk:
+      name: storage
+      mountPath: /tmp
+      sizeGB: 10
+    healthCheckPath: /
+    autoDeploy: true 
