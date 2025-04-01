@@ -3,12 +3,13 @@ services:
     name: iosc-rp-summary
     env: python
     buildCommand: |
+      apt-get update && apt-get install -y build-essential python3-dev
       python -m pip install --upgrade pip
       pip install --no-cache-dir -r requirements.txt
     startCommand: gunicorn web_app:app
     envVars:
       - key: PYTHON_VERSION
-        value: 3.8.0
+        value: 3.9.0
       - key: FLASK_ENV
         value: production
       - key: UPLOAD_FOLDER
